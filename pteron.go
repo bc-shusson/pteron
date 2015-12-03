@@ -4,13 +4,12 @@ import (
   "fmt"
   "io/ioutil"
   "os"
-  "strconv"
   "strings"
   "time"
 )
 
 const QUERY_TIMEOUT = 10
-const WORKER_COUNT = 100000
+const MAXIMUM_WORKERS = 10000
 
 func check(e error) {
   if e != nil {
@@ -18,7 +17,14 @@ func check(e error) {
   }
 }
 
-func dataWorker(id int, jobs <-chan string, results chan string) {
+func Min(x, y int) int {
+  if x < y {
+    return x
+  }
+  return y
+}
+
+func dataWorker(id int, jobs <-chan string, results chan map[string]string) {
   for j := range jobs {
     // create an anon go routine so we can timeout if the query takes to long
     queryJob := make(chan string, 1)
@@ -27,12 +33,16 @@ func dataWorker(id int, jobs <-chan string, results chan string) {
       queryJob <- queryDatabase(j)
     }()
 
+    resultMap := make(map[string]string)
     select {
     case result := <-queryJob:
-      results <- result
+      resultMap["result"] = result
+      resultMap["store_id"] = j
+      results <- resultMap
     case <-time.After(time.Second * QUERY_TIMEOUT):
       fmt.Println("worker", id, "timed out trying to process ", j)
-      results <- "Query Timed out"
+      resultMap[j] = "query timed out"
+      results <- resultMap
     }
   }
 }
@@ -45,33 +55,46 @@ func queryDatabase(storeId string) string {
   return "A RESULT"
 }
 
-func queryDatabases(storeIds []string) {
+func createWorkers(storeIds []string, jobs <-chan string) chan map[string]string {
+  results := make(chan map[string]string, len(storeIds))
+  workersCount := Min(len(storeIds), MAXIMUM_WORKERS)
+  for w := 0; w < workersCount; w++ {
+    go dataWorker(w, jobs, results)
+  }
+  return results
+}
+
+func createJobs(storeIds []string) chan string {
+  jobs := make(chan string, len(storeIds))
+  for i := 0; i < len(storeIds); i++ {
+    jobs <- storeIds[i]
+  }
+  close(jobs)
+  return jobs
+}
+
+func handeResults(results <-chan map[string]string, storeIds []string) {
+
   path := "query.results"
   err := os.RemoveAll(path)
   check(err)
   f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
   check(err)
   defer f.Close()
-  results := make(chan string, len(storeIds))
-
-  jobs := make(chan string, len(storeIds))
-
-  for w := 0; w < WORKER_COUNT; w++ {
-    go dataWorker(w, jobs, results)
-  }
-
-  for i := 0; i < len(storeIds); i++ {
-    jobs <- storeIds[i]
-  }
-  close(jobs)
 
   for i := 0; i < len(storeIds); i++ {
     result := <-results
-    index := strconv.Itoa(i)
-    check(err)
-    _, err = f.WriteString(result + index)
+    _, err = f.WriteString(result["store_id"] + ": " + result["result"])
     check(err)
   }
+}
+
+func queryDatabases(storeIds []string) {
+
+  jobs := createJobs(storeIds)
+  results := createWorkers(storeIds, jobs)
+
+  handeResults(results, storeIds)
 
 }
 
