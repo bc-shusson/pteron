@@ -85,7 +85,7 @@ func createJobs(storeIds []string) chan string {
   return jobs
 }
 
-func handeResults(results <-chan map[string]string, storeIds []string) {
+func handleResults(results <-chan map[string]string, storeIds []string) {
 
   path := "query.results"
   err := os.RemoveAll(path)
@@ -106,7 +106,7 @@ func queryDatabases(storeIds []string) {
   jobs := createJobs(storeIds)
   results := createWorkers(storeIds, jobs)
 
-  handeResults(results, storeIds)
+  handleResults(results, storeIds)
 
 }
 
